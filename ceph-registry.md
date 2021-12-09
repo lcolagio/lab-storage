@@ -2,11 +2,9 @@
 
 ## usefull link
 - https://access.redhat.com/documentation/en-us/red_hat_openshift_container_storage/4.8/html/deploying_openshift_container_storage_using_bare_metal_infrastructure/assembly_uninstalling-openshift-container-storage_rhocs#removing-openshift-container-platform-registry-from-openshift-container-storage-external_rhocs
+- https://docs.openshift.com/container-platform/4.9/registry/securing-exposing-registry.html
 
-
-
-## Registry empty
-
+## Exemple Registry empty (sans disque)
 ```
 apiVersion: imageregistry.operator.openshift.io/v1
 kind: Config
@@ -31,8 +29,28 @@ spec:
   replicas: 1
 ```
 
-## Registry with Cephfs
+## Exemple de Registry avec Cephfs
 
+### Ajouter un PVC cephfs
+```
+oc apply -f - <<EOF
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: ocs4registry
+  namespace: openshift-image-registry
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: ocs-storagecluster-cephfs
+  volumeMode: Filesystem
+EOF
+```
+
+### Ajouter le PVC dans la CRD Config.imageregistry.operator.openshift.io/v1
 ```
 apiVersion: imageregistry.operator.openshift.io/v1
 kind: Config
@@ -58,7 +76,6 @@ spec:
 ```
 
 ## Registry with AWS
-
 ``` 
 apiVersion: imageregistry.operator.openshift.io/v1
 kind: Config
@@ -91,68 +108,95 @@ spec:
 
 ---
 
-# Exemple de Build Image argocdrepo avec le plug-in vault
+# Exemple de Build Image avec IS et un imagePullPolicy: Always
 
-
-## Creer une image stream qui contiendra le build de l'image argocd-vault-plugin
+## Creer une image stream qui contiendra le build de l'image buildée
 
 ```
 oc new-project build-image-foo
 
-ARGOCD_VAULT_PLUGIN_NAMESPACE=build-image-foo
+NAMESPACE=build-image-foo
 
 oc apply -f - <<EOF
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
   labels:
-    app: argocd-vault-plugin
-  name: argocd-vault-plugin
-  namespace: ${ARGOCD_VAULT_PLUGIN_NAMESPACE}
+    app: ruby-lco
+  name: ruby-lco
+  namespace: ${NAMESPACE}
 EOF
 ```
 
-## Creer un build config
-
+## Creer un Build-Config avec en output IS
 ```
-ARGOCD_REPO_SOURCE_IMAGE=registry.redhat.io/openshift-gitops-1/argocd-rhel8:v1.3.1
-
 oc apply -f - <<EOF
 apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
-  labels:
-    app: argocd-vault-plugin
-  name: argocd-vault-plugin
-  namespace: ${ARGOCD_VAULT_PLUGIN_NAMESPACE}
+  name: ruby-lco
+  namespace: ${NAMESPACE}
 spec:
   output:
     to:
       kind: ImageStreamTag
-      name: argocd-vault-plugin:131-150
+      name: ruby-lco:1.0
   source:
-    type: Dockerfile
-    dockerfile: |
-      FROM ${ARGOCD_REPO_SOURCE_IMAGE}
-      USER root
-      RUN curl -L -o /usr/local/bin/argocd-vault-plugin https://github.com/IBM/argocd-vault-plugin/releases/download/v1.5.0/argocd-vault-plugin_1.5.0_linux_amd64
-      RUN chmod +x /usr/local/bin/argocd-vault-plugin
-      USER argocd
+    git:
+      ref: master
+      uri: 'https://github.com/openshift/ruby-ex.git'
+    type: Git
   strategy:
-    dockerStrategy:
-      buildArgs:
-      # - name: "NO_PROXY"
-      #   value: "localhost,127.0.0.0,127.0.0.1,127.0.0.2,localaddress,.localdomain.com,.laposte.fr"
-    type: Docker
+    type: Source
+    sourceStrategy:
+      from:
+        kind: ImageStreamTag
+        name: 'ruby:2.7'
+        namespace: openshift
+      env: []
 EOF
 
-oc start-build argocd-vault-plugin -n ${ARGOCD_VAULT_PLUGIN_NAMESPACE}
+oc start-build ruby-lco -n ${NAMESPACE}
 ```
 
 ## Resultat du build
 
-Successfully pushed image-registry.openshift-image-registry.svc:5000/build-image-foo/argocd-vault-plugin@sha256:d489c1e62201edfd5abe638375428885e117b46efdf9734d9470961748539160
+Successfully pushed image-registry.openshift-image-registry.svc:5000/build-image-foo/ruby-lco@sha256:xxxxxx
 
+## Aller voir le contenu dans le fs de la registry
 ```
-oc get pod -n openshift-image-registry | grep image
+oc project openshift-image-registry
+oc get pod  | grep image
+oc rsh image-registry-xxxxxx-xxxx
+
+ls registry/docker/registry/v2/repositories/
+```
+
+
+## Creer un deployment qui pointe sur l'image buildée avec imagePullPolicy: Always pour forcer le démarrage
+```
+oc apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ruby-lco
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    matchLabels:
+      app: httpd
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: httpd
+    spec:
+      containers:
+        - name: httpd
+          image: >-
+            image-registry.openshift-image-registry.svc:5000/build-image-foo/ruby-lco:1.0
+          ports:
+            - containerPort: 8080
+          imagePullPolicy: Always            
+EOF
 ```
