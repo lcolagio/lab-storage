@@ -132,6 +132,7 @@ oc get route
 Example http://<your_route>/articles
 username: openshift
 password: secret
+```
 
 ## Add file
 ```
