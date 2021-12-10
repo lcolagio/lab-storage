@@ -100,3 +100,71 @@ echo ${NOOBAA_S3_SECRET_ACCESS_KEY}
 alias s3-noobaa-k10='AWS_ACCESS_KEY_ID=${NOOBAA_S3_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${NOOBAA_S3_SECRET_ACCESS_KEY} aws --endpoint https://${NOOBAA_S3_ENDPOINT} --no-verify-ssl s3'
 s3-noobaa ls | grep ${OADP_OBJECT_STORAGE_CLAIM}
 ```
+
+
+
+# Use-Case
+
+
+## Deploy APP 1
+```
+oc new-project my-database-app
+curl -s https://raw.githubusercontent.com/red-hat-storage/ocs-training/master/training/modules/ocs4/attachments/configurable-rails-app.yaml | oc new-app -p STORAGE_CLASS=ocs-storagecluster-ceph-rbd -p VOLUME_CAPACITY=100Gi -f -
+```
+
+## Deploy APP 2
+```
+oc new-project my-database-app2
+curl -s https://raw.githubusercontent.com/red-hat-storage/ocs-training/master/training/modules/ocs4/attachments/configurable-rails-app.yaml | oc new-app -p STORAGE_CLASS=ocs-storagecluster-ceph-rbd -p VOLUME_CAPACITY=100Gi -f -
+```
+
+
+### Show PV OCS
+```
+oc get pv -o 'custom-columns=NAME:.spec.claimRef.name,PVNAME:.metadata.name,STORAGECLASS:.spec.storageClassName,VOLUMEHANDLE:.spec.csi.volumeHandle'
+```
+
+
+### Go to Application
+```
+oc get route
+
+Example http://<your_route>/articles
+username: openshift
+password: secret
+
+## Add file
+```
+oc rsh -n my-database-app postgresql-1
+ ls /var/lib/pgsql/data/userdata
+
+touch /var/lib/pgsql/data/14h00.txt
+ls /var/lib/pgsql/data/
+```
+
+## Faire un snapshot / clone
+monter le volume sur postgresql-1 via le deployment
+
+
+## Lancer tool cepfs
+Get the full RBD name and the associated information for our postgreSQL PV
+```
+oc get pv -o 'custom-columns=NAME:.spec.claimRef.name,PVNAME:.metadata.name,STORAGECLASS:.spec.storageClassName,VOLUMEHANDLE:.spec.csi.volumeHandle'
+
+CSIVOL=$(oc get pv $(oc get pv | grep my-database-app | awk '{ print $1 }') -o jsonpath='{.spec.csi.volumeHandle}' | cut -d '-' -f 6- | awk '{print "csi-vol-"$1}')
+echo $CSIVOL
+```
+
+## Rbd Tool
+```
+
+oc patch OCSInitialization ocsinit -n openshift-storage --type json --patch  '[{ "op": "replace", "path": "/spec/enableCephTools", "value": true }]'
+TOOLS_POD=$(oc get pods -n openshift-storage -l app=rook-ceph-tools -o name)
+oc rsh -n openshift-storage $TOOLS_POD
+
+```
+
+
+
+
+
